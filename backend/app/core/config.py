@@ -250,6 +250,10 @@ class Settings(BaseSettings):
     # never in the background; manifests come from the same host, checked
     # against the index's sha256. Point it at a mirror to host your own.
     plugins_index_url: str = "https://plugins.usesecuro.com/v1/index.json"
+    # Comma-separated plugin ids whose provider feed counts as complete, as if
+    # their manifest said `complete_feed: true` (homelab patch until a Securo
+    # release takes the manifest field).
+    plugins_complete_feed: str = ""
     # Plugins with code run in the `securo-plugins` runner (Compose profile
     # `plugins`), never in this process. Blank URL: no runner, so no plugin
     # with code can be installed. The token is shared with the runner only.

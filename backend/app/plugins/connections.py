@@ -573,7 +573,8 @@ async def _write_payload(
                 session, bank_id, workspace_id, user_id,
                 provider=PluginPayloadProvider(
                     bank.provider, payload, logo_urls, scope=bank.external_id,
-                    complete_feed=_integration(manifest, connection.integration).complete_feed,
+                    complete_feed=_integration(manifest, connection.integration).complete_feed
+                    or connection.plugin_id in _vouched_plugins(),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - recorded on the connection, retried on the next sync
@@ -587,6 +588,11 @@ async def _write_payload(
         await session.refresh(connection)
     _keep(connection, {"state": reply.get("state")}, secrets)
     _succeeded(connection)
+
+
+def _vouched_plugins() -> set[str]:
+    """Plugins the operator vouches for (PLUGINS_COMPLETE_FEED), manifest or not."""
+    return {p.strip() for p in get_settings().plugins_complete_feed.split(",") if p.strip()}
 
 
 def _succeeded(connection: PluginConnection) -> None:

@@ -414,6 +414,28 @@ async def test_the_sync_hands_on_whether_the_feed_is_complete(
     assert seen == [vouched]
 
 
+@pytest.mark.parametrize("listed", ["acme/ledger", " other/plugin , acme/ledger ", "other/plugin", ""])
+@pytest.mark.asyncio
+async def test_an_operator_can_vouch_for_a_plugin_feed(
+    session: AsyncSession, ids, provider_catalog, plugin_runner, monkeypatch, listed
+):
+    """Until a plugin can declare `complete_feed` in a released Securo, an
+    instance can name it in PLUGINS_COMPLETE_FEED (comma-separated ids)."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "plugins_complete_feed", listed)
+    connection = await _provider_connection(session, ids)
+    seen = []
+
+    async def capture(*args, provider=None, **kwargs):
+        assert provider is not None
+        seen.append(provider.complete_feed)
+
+    with patch("app.services.connection_service.sync_connection", new=capture):
+        await connections.sync(session, connection)
+    assert seen == ["acme/ledger" in [p.strip() for p in listed.split(",")]]
+
+
 @pytest.mark.asyncio
 async def test_nothing_fetched_keeps_the_cursor_and_writes_nothing(
     session: AsyncSession, ids, provider_catalog, plugin_runner
