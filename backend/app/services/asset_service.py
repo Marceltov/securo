@@ -425,6 +425,19 @@ def build_market_value_series(
     return out
 
 
+
+def _ledger_valued(asset: Asset, sources: set[str]) -> bool:
+    """Whether the asset's chart is its ledger replayed (units held each day x price).
+
+    Market-priced holdings always are. A holding a bank connection syncs is
+    once its ledger holds trades from that connection's provider: they carry
+    each buy and sale on its own date, which the stored values (one per sync)
+    cannot. Trades entered by hand alone don't switch it.
+    """
+    if asset.valuation_method == "market_price":
+        return True
+    return asset.connection_id is not None and bool(asset.source) and asset.source in sources
+
 async def _load_asset_native_values(
     session: AsyncSession,
     assets: list[Asset],
@@ -455,19 +468,21 @@ async def _load_asset_native_values(
     for aid, d, amt, price in rows:
         raw[str(aid)].append((d, amt, price))
 
-    # Bulk-load the ledger for market-priced holdings (one query).
-    market_ids = [a.id for a in assets if a.valuation_method == "market_price"]
+    # Bulk-load the ledger for market-priced and synced holdings (one query).
+    market_ids = [a.id for a in assets if a.valuation_method == "market_price" or a.connection_id is not None]
     txs_by_aid: dict[str, list[TxRecord]] = {}
     splits_by_aid: dict[str, list[SplitRecord]] = {}
+    sources_by_aid: dict[str, set[str]] = {}
     if market_ids:
         tq = select(
             AssetTransaction.asset_id, AssetTransaction.date,
             AssetTransaction.kind, AssetTransaction.quantity, AssetTransaction.price,
-            AssetTransaction.old_units, AssetTransaction.new_units,
+            AssetTransaction.old_units, AssetTransaction.new_units, AssetTransaction.source,
         ).where(AssetTransaction.asset_id.in_(market_ids))
         if up_to_date is not None:
             tq = tq.where(AssetTransaction.date <= up_to_date)
-        for aid, d, kind, qty, price, old_units, new_units in (await session.execute(tq)).all():
+        for aid, d, kind, qty, price, old_units, new_units, source in (await session.execute(tq)).all():
+            sources_by_aid.setdefault(str(aid), set()).add(source or "")
             if kind == "split":
                 # A split has no quantity or price of its own; replaying it as a
                 # "sell of 0" would leave the units unchanged.
@@ -480,7 +495,7 @@ async def _load_asset_native_values(
     values_map: dict[str, list[tuple[date, float]]] = {}
     for asset in assets:
         aid = str(asset.id)
-        if asset.valuation_method == "market_price":
+        if _ledger_valued(asset, sources_by_aid.get(aid, set())):
             values_map[aid] = build_market_value_series(
                 raw[aid], txs_by_aid.get(aid, []), splits_by_aid.get(aid, [])
             )
@@ -1058,25 +1073,28 @@ async def get_asset_value_trend(
         )
     ).all()
 
-    if asset.valuation_method == "market_price":
+    txs = []
+    if asset.valuation_method == "market_price" or asset.connection_id is not None:
         txs = (
             await session.execute(
                 select(
                     AssetTransaction.date, AssetTransaction.kind,
                     AssetTransaction.quantity, AssetTransaction.price,
                     AssetTransaction.old_units, AssetTransaction.new_units,
+                    AssetTransaction.source,
                 )
                 .where(AssetTransaction.asset_id == asset_id)
             )
         ).all()
+    if _ledger_valued(asset, {source or "" for *_, source in txs}):
         series = build_market_value_series(
             [(d, a, p) for d, a, p in rows],
             [
                 (d, k, Decimal(str(q)), Decimal(str(pr)) if pr is not None else None)
-                for d, k, q, pr, _, _ in txs
+                for d, k, q, pr, _, _, _ in txs
                 if k != "split"
             ],
-            [(d, old, new) for d, k, _, _, old, new in txs if k == "split"],
+            [(d, old, new) for d, k, _, _, old, new, _ in txs if k == "split"],
         )
         return [{"date": d.isoformat(), "amount": v} for d, v in series]
 
