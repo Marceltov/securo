@@ -3317,6 +3317,7 @@ async def _expire_cancelled_holds(
     since: date,
     *,
     uid_keyed: bool = True,
+    claimable: bool = True,
 ) -> None:
     """Delete the pending rows a complete feed dropped without booking.
 
@@ -3331,11 +3332,14 @@ async def _expire_cancelled_holds(
     are left alone.
 
     A provider plugin with `complete_feed` keys rows by its own ids, so
-    ``uid_keyed`` is off for it: there is no account uid to check.
+    ``uid_keyed`` is off for it: there is no account uid to check. Nor can a
+    booked entry of its claim a hold (Path 6 is Enable Banking's), so
+    ``claimable`` is off too: there is no settle window to wait out, and a
+    row that left its complete feed goes at once.
     """
     today = app_today()
     window_start = max(since, today - timedelta(days=_EB_SURE_FEED_DAYS))
-    cutoff = today - timedelta(days=_EB_CANCELLED_HOLD_DAYS)
+    cutoff = today - timedelta(days=_EB_CANCELLED_HOLD_DAYS if claimable else 0)
     # Lock the candidates before reading their attachments, so a file
     # uploaded while the sync runs either lands first and keeps the row, or
     # waits for the delete.
@@ -4782,6 +4786,7 @@ async def sync_connection(
                     live_txn_external_ids[account.id],
                     since,
                     uid_keyed=connection.provider == "enable_banking",
+                    claimable=connection.provider == "enable_banking",
                 )
 
             # Reconcile the opening balance after any new transactions land so
